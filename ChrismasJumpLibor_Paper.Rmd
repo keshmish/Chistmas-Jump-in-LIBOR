@@ -1,0 +1,359 @@
+```{r}
+PATH = "/Users/cynthiatatum/Desktop/Presentation/"
+FILENAME = "LIBOR USD.csv"
+holiday_var = "ChristmasDay"
+days_before_holiday <- 21 #14
+days_after_holiday <- 6
+# Switch: 1 (ON), 2 (1 Week), 3 (4 weeks), 4 (2 months),5 (6 months)
+case <- 4
+
+Year_begin = 1997#2004
+#The last one will be the test year
+Year_end = 2012#2018
+```
+
+
+```{r}
+# Load Libraries
+library(dygraphs)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(timeDate)
+library("viridis") 
+library(RColorBrewer)
+
+# Concatenate PATH and FILENAME strings
+File_Path = paste(PATH,FILENAME,sep="")
+
+# READ in CSV and name it "DATA"
+DATA <- read.csv(File_Path)
+
+##############################################################################
+# Create a new table named "rates_to_track" from "LIBOR" with column name "time stamp" containing entries with format Year-Month-Day 
+##############################################################################
+rates_to_track <- DATA
+
+# Convert date format to year-month-day
+rates_to_track <- rates_to_track  %>% mutate(timestamp = as.Date(dmy(rates_to_track$Date)))  
+##############################################################################
+
+##############################################################################
+
+# listHolidays() will give you a list of possible holidays to use
+# In this case, we're using ChristmasDay
+
+holidays <- c(holiday_var)  
+
+# Create a Table named "holiday_dates" line 59-63
+  
+# Holiday        | Date 
+# ChristmasDay     2003-12-25
+# ChristmasDay     2004-12-25
+# ............     ..........
+# ChristmasDay     2009-12-25 
+
+holiday_dates = do.call(rbind,
+        lapply(holidays, function(i){
+          foo <- match.fun(i)  
+          data.frame(Holiday = i,
+                     Date = as.Date(foo(Year_begin:Year_end)))
+        }))
+#############################################################################
+
+# A function that finds how far a date is from the given holiday (the minimum distance). returns a column of this distance and the year of the holiday
+
+close_to_holiday <- function(input_date){
+  distance_from_all_holidays <- mutate(holiday_dates, relative_date = floor(as.period(interval(Date, input_date) ) %/% days(1) ) )%>%
+    mutate(absolute_relative_date = abs(relative_date)) %>% arrange(absolute_relative_date)
+  return(c(distance_from_all_holidays[1, "relative_date"], year(distance_from_all_holidays[1, "Date"])))
+}
+
+#############################################################################
+```
+
+```{r message=FALSE}
+
+# next two functions are a hack to make the dataframe wrangling work, can be made better 
+get_relative_date <- function(input_date){
+  return(close_to_holiday(input_date)[1])
+}
+
+get_relative_holiday_year <- function(input_date){
+  return(close_to_holiday(input_date)[2])
+}
+
+#############################################################################
+
+# Finally, add relative holiday data to the dataframe and filter for the days you need 
+
+rates_to_track_with_holiday_data <- rates_to_track %>% mutate(relative_date = lapply(timestamp, get_relative_date) ) %>% mutate(holiday_year = lapply(timestamp, get_relative_holiday_year)) %>%
+  filter(relative_date >= days_before_holiday * -1 & relative_date <= days_after_holiday)
+
+```
+
+```{r  message=FALSE}
+# Creates vector Years_array = ("2004", "2005",...,"2018")
+Years_array <- paste(c(min(as.double(rates_to_track_with_holiday_data$holiday_year)):max(as.double(rates_to_track_with_holiday_data$holiday_year))))
+Number_of_Years <- length(Years_array)
+
+# Create Heaviside function for data wrangling
+Heaviside <- function(x,a = 0){if(x==0){return(0)} else{return((sign(x)+1)/2)}}
+
+# Function performs regression on a given year in "holiday_data"
+linear_regression <- function(year,holiday_data,case){
+  
+  holiday_data <- holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(lm(switch(case,ON,X1W,X1M,X2M,X6M) ~ as.integer(relative_date),data = holiday_data))}
+  # change relative_date to week.day
+
+# Function filter data in "holiday_data" in a given year
+filtered_data <- function(year,holiday_data){
+  holiday_data <- holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(holiday_data)}
+
+# Vector of intercepts beta_0's
+vector_intercept = c()
+# Vector of slopes beta_1's
+vector_slope = c()
+#Vector of week days of the Xmas on j-th year
+vector_LastIs24 = c()
+#Vector of ave rates after holi subtructed slope of days before  
+AveAfterHoli = c()
+
+rates_to_track_with_holiday_dataBefore<-
+  rates_to_track %>% mutate(relative_date = lapply(timestamp, get_relative_date) ) %>% mutate(holiday_year = lapply(timestamp, get_relative_holiday_year)) %>%
+  filter(relative_date >= days_before_holiday * -1 & relative_date <= 0)
+
+rates_to_track_with_holiday_dataAfter<-
+  rates_to_track %>% mutate(relative_date = lapply(timestamp, get_relative_date) ) %>% mutate(holiday_year = lapply(timestamp, get_relative_holiday_year)) %>%
+  filter(relative_date > 0 & relative_date <= days_after_holiday)
+#View(rates_to_track_with_holiday_dataBefore)
+
+# Vector of tabular data from year 2004-2019
+vector_data_table = c()
+vector_data_tableAfter = c()
+```
+
+
+```{r}
+
+Number_of_Years_1 <- Number_of_Years - 1 
+Test_year <- Number_of_Years  #Test
+#print(Number_of_Years)
+for(j in c(1:Number_of_Years_1)){
+  vector_data_table[[j]] <- filtered_data(Years_array[j],rates_to_track_with_holiday_data)
+  vector_data_tableAfter[[j]] <- filtered_data(Years_array[j],rates_to_track_with_holiday_dataAfter)
+}
+#print(Years_array[1])
+#print(Number_of_Years)
+Test_data_After <- filtered_data(Years_array[Test_year],rates_to_track_with_holiday_dataAfter)
+#View(rates_to_track_with_holiday_data)
+#View(Test_data_After )
+```
+```{r}
+
+#For each year regression we take only the days before the holiday
+for(j in c(1:Number_of_Years_1)){
+  vector_intercept[j] = coef(linear_regression(Years_array[j],rates_to_track_with_holiday_dataBefore,case))[1]
+  vector_slope[j] = coef(linear_regression(Years_array[j],rates_to_track_with_holiday_dataBefore,case))[2]
+  
+  if(max(do.call(rbind, as.list(filtered_data(Years_array[j],rates_to_track_with_holiday_dataBefore)$relative_date)
+))==-1){vector_LastIs24[j] <- 1}
+  else{vector_LastIs24[j] <- 0}
+  
+  sw <- vector_data_tableAfter[[j]]$X2M #switch(case,ON,X1W,X1M,X2M,X6M  )
+  #print(sw)
+  AveAfterHoli[j] = mean(sw - vector_slope[j]*as.integer(vector_data_tableAfter[[j]]$relative_date))
+}
+#Jump at each separately
+delta <- AveAfterHoli - vector_intercept
+
+#for(j in c(1:Number_of_Years)){
+#  vector_intercept[j] = coef(linear_regression(Years_array[j],rates_to_track_with_holiday_data,case))[1]
+#  vector_slope[j] = coef(linear_regression(Years_array[j],rates_to_track_with_holiday_data,case))[2]
+#}
+print(vector_intercept)
+print(vector_slope)
+print(vector_LastIs24)
+#print(delta)
+
+
+
+
+# Add columns which includes recentered rates and Pre column
+for(j in c(1:Number_of_Years_1)){
+  vector_data_table[[j]] <- vector_data_table[[j]] %>% 
+    mutate(recentered_rates_intercept = (switch(case,ON,X1W,X1M,X2M,X6M  ) - vector_intercept[j])) %>% 
+    #mutate(withoutSlopePart_rates = (switch(case,ON,X1W,X1M,X2M,X6M  ) - vector_slope[j]*as.integer(vector_data_table[[j]]$relative_date) ))%>%
+    mutate(recentered_rates_normalized = (switch(case,ON,X1W,X1M,X2M,X6M  ) - vector_intercept[j]) / vector_slope[j] ) %>%  
+    mutate(rates_normalizedSub =  recentered_rates_normalized-1.0*as.integer(vector_data_table[[j]]$relative_date) )%>% #
+    mutate(Pre = lapply(vector_data_table[[j]]$relative_date,Heaviside))
+  
+}
+
+# Concatenate my tabular data from each year
+largeData <- vector_data_table[[1]]
+for(j in c(2:Number_of_Years_1)){
+  largeData <- rbind(largeData,vector_data_table[[j]])
+}
+
+# Construct linear regrerssion model 
+# recentered_rates (response), relative_date (predictor), Pre (binary categorical predictor)
+
+# Linear Regression Model with 1 predictor Pre. Response variable is (ON,X1W,X1M,X2M,X6M)
+#View(largeData)
+#write.csv(largeData,"/Users/cynthiatatum/Desktop/Presentation/DataAroundXmas.csv")
+```
+```{r}
+#print(vector_intercept)
+#print(vector_slope)
+A<- c(1993,1994,1995,1996,1997,1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018)
+indexYear_begin <- match(Year_begin,A)
+indexYear_end <- match(Year_end,A) -1
+indexYear_Test <- match(Year_end,A)  # Test
+B<- c(6,7,1,3,4,5,6,1,2,3,4,6,7,1,2,4,5,6,7,2,3,4,5,7,1,2)
+alphaDay<- c(B[indexYear_begin:indexYear_end])
+
+#alpha <- cbind(year=A, XmasWeekDay=B)
+#print(alphaDay )
+#print(delta)
+```
+```{r}
+
+
+#ModelOnCoeff <- lm(delta ~ vector_slope + vector_intercept + alphaDay + I(alphaDay**2) + I(alphaDay**3) + I(alphaDay**4) + I(alphaDay**5) + I(alphaDay**6))
+inter <- vector_slope * vector_intercept
+
+#ModelOnCoeff <- lm(delta ~ vector_slope +  inter )
+
+#THE MODEL TAKEN FOR THE PAPER!!!
+
+ModelOnCoeff <- lm(delta ~ vector_slope + vector_intercept + vector_slope * vector_intercept )
+
+
+#ModelOnCoeff <- lm(delta ~ vector_slope + vector_intercept + vector_LastIs24)
+#model_standard <- lm(withoutSlopePart_rates ~ as.integer(Pre), data = largeData)
+
+summary(ModelOnCoeff)
+confint(ModelOnCoeff)
+#View(rates_to_track_with_holiday_dataBefore)
+C <- coef(linear_regression(Years_array[Test_year],rates_to_track_with_holiday_dataBefore,case))
+#print(C)
+Test_intercept = coef(linear_regression(Years_array[Test_year],rates_to_track_with_holiday_dataBefore,case))[1]
+Test_slope = coef(linear_regression(Years_array[Test_year],rates_to_track_with_holiday_dataBefore,case))[2]
+Test_LastIs24 <- 0
+if(max(do.call(rbind, as.list(filtered_data(Years_array[Test_year],rates_to_track_with_holiday_dataBefore)$relative_date)))==-1){Test_LastIs24 <- 1}
+
+Test_alphaDay <-   c(B[[indexYear_Test]])
+
+sw <- Test_data_After$X2M #switch(case,ON,X1W,X1M,X2M,X6M  )
+#print(Test_slope)
+#print(sw)
+
+Test_AveAfterHoli = mean(sw - Test_slope*as.integer(Test_data_After$relative_date)) - Test_intercept
+#  AveAfterHoli[j] = mean(sw - vector_slope[j]*as.integer(vector_data_tableAfter[[j]]$relative_date))
+
+#Test_jump <- 1.0*coef(ModelOnCoeff)[1] + 1.0*coef(ModelOnCoeff)[2]*Test_slope + 1.0*coef(ModelOnCoeff)[3]*Test_intercept + 1.0*coef(ModelOnCoeff)[4]*Test_alphaDay + 
+#  1.0*coef(ModelOnCoeff)[5]*Test_alphaDay**2 + 1.0*coef(ModelOnCoeff)[6]*Test_alphaDay**3 +1.0*coef(ModelOnCoeff)[7]*Test_alphaDay**4 + 1.0*coef(ModelOnCoeff)[8]*Test_alphaDay**5 + 1.0*coef(ModelOnCoeff)[9]*Test_alphaDay**6
+
+#Test_jump <- 1.0*coef(ModelOnCoeff)[1] + 1.0*coef(ModelOnCoeff)[2]*Test_slope  + 1.0*coef(ModelOnCoeff)[3]*Test_slope*Test_intercept
+
+Test_jump <- 1.0*coef(ModelOnCoeff)[1] + 1.0*coef(ModelOnCoeff)[2]*Test_slope + 1.0*coef(ModelOnCoeff)[3]*Test_intercept + 1.0*coef(ModelOnCoeff)[4]*Test_slope*Test_intercept
+  #Test_LastIs24
+#NewData <- data.frame(matrix(unlist(C), nrow=1, byrow=T))#matrix(unlist(l), nrow=length(l), byrow=T)
+#View(NewData)
+#predict(ModelOnCoeff, newdata = NewData, interval = 'confidence')
+
+AbsoluteAveAfterOnTestData <- mean(sw)
+print("AbsoluteAveAfterOnTestData")
+#print(sw)
+print(AbsoluteAveAfterOnTestData)
+
+PredictAbsolAveAfterOnTestYear <- Test_jump + Test_intercept + Test_slope*mean(as.integer(Test_data_After$relative_date))
+print("PredictAbsolAveAfterOnTestYear")
+print(PredictAbsolAveAfterOnTestYear)
+
+Test_delta <- Test_jump - Test_AveAfterHoli
+
+print(Years_array[Test_year])
+print(Test_AveAfterHoli)
+print(Test_jump)
+```
+
+```{r}
+# Linear Regression Model with 1 predictor Pre. Response variable is recentered data by its mean
+model_recentered_intercept <- lm(recentered_rates_intercept ~ as.integer(Pre), data = largeData)
+summary(model_recentered_intercept)
+```
+
+```{r}
+# Linear Regression Model with 1 predictor Pre. Response variable is data recentered by its mean and divided by its slope
+model_recentered_normalized <- lm(recentered_rates_normalized ~ as.integer(Pre), data = largeData)
+summary(model_recentered_normalized)
+```
+
+```{r}
+# Linear Regression Model with 2 predictor: Pre is a predictor, relative date is a predictor. Response variable is data subtracted by its mean
+model_2_recentered_intercept <- lm(recentered_rates_intercept ~ as.integer(relative_date) + as.integer(Pre), data = largeData)
+summary(model_2_recentered_intercept)
+```
+
+```{r}
+#The Presented one!!!!!!!!!!!
+# Linear Regression Model with 2 predictors: Pre is a predictor, relative data is a predictor. Response variable is data subtracted by its mean and divided by slope
+model_2_recentered_normalized <- lm(recentered_rates_normalized ~ as.integer(relative_date) + as.integer(Pre), data = largeData)
+summary(model_2_recentered_normalized)
+```
+```{r}
+#With subtraction of relative_date !!!
+# Linear Regression Model with 1 predictors: Pre is a predictor Response variable is data subtracted by its mean and divided by slope, then subtracted by relative_date (x-axis)
+model_21_recentered_normalized <- lm(rates_normalizedSub ~ as.integer(Pre), data = largeData)
+summary(model_21_recentered_normalized)
+```
+
+```{r}
+# Linear Regression Model with 1 predictors: relative data is a predictor. Response variable is data subtracted by its mean and divided by slope
+model_22_recentered_normalized <- lm(recentered_rates_normalized ~ as.integer(relative_date) , data = largeData)
+summary(model_22_recentered_normalized)
+```
+
+```{r}
+# Linear Regression Model with interaction term and two predictors Pre and relative date. Response is Data recentered by its mean
+model_recentered_3_intercept <- lm(recentered_rates_intercept ~ as.integer(relative_date) + as.integer(Pre) + as.integer(relative_date) * as.integer(Pre) , data = largeData)
+summary(model_recentered_3_intercept)
+```
+
+```{r}
+# Linear Regression model with interaction term and two predictors Pre and rerlative date. Response is Data recentered by its mean and divided by slope
+#model_recentered_3_normalized <- lm(recentered_rates_normalized ~ as.integer(relative_date) + as.integer(relative_date) * as.integer(Pre) , data = largeData)
+model_recentered_3_normalized <- lm(recentered_rates_normalized ~ as.integer(relative_date) + as.integer(Pre) + as.integer(relative_date) * as.integer(Pre) , data = largeData)
+summary(model_recentered_3_normalized)
+```
+
+```{r}
+# Scatter plot of data
+ggplot(rates_to_track_with_holiday_data,aes(x = as.numeric(relative_date), y = switch(case,ON,X1W,X1M,X2M,X6M), color=as.double(holiday_year) )) + geom_point(size=1,stroke=1) + labs(x = paste("Days before",holiday_var,sep=" "), y = "Rates", color = "Year") +  scale_colour_gradientn(colours=rainbow(4)) + ggtitle("Data") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Scatter Plot of recentered_rates vs relative_date
+
+largeData_2018 <- largeData %>% filter(holiday_year == 2012)
+
+ggplot(largeData_2018,aes(x = as.numeric(relative_date), y = switch(case,ON,X1W,X1M,X2M,X6M), color=1 )) + geom_point(size=1,stroke=1) + labs(x = paste("Days before",holiday_var,sep=" "), y = "Rates", color = "Year") +  scale_colour_gradientn(colours=rainbow(5)) + ggtitle("Data") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+# Scatter Plot of Standardized Data
+ggplot(largeData) + geom_point(aes(x = as.numeric(relative_date), y = recentered_rates_normalized, color = as.double(holiday_year))) + labs(x = paste("Days before",holiday_var,sep=" ") , y = "(Rates-Mean) / Slope", color = "Year") + scale_colour_gradientn(colours=rainbow(4)) + ggtitle("Data standardized") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+```{r}
+# Scatter Plot of Standardized Data
+ggplot(largeData) + geom_point(aes(x = as.numeric(relative_date), y = rates_normalizedSub, color = as.double(holiday_year))) + labs(x = paste("Days before",holiday_var,sep=" ") , y = "(Rates-Mean) / Slope - relative_date", color = "Year") + scale_colour_gradientn(colours=rainbow(4)) + ggtitle("Data: only nonlinear part") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
