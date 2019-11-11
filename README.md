@@ -1,4 +1,4 @@
-# Chistmas-Jump-in-LIBOR
+# Christmas-Jump-in-LIBOR
 The R-code used in paper "Christmas Jump in LIBOR"
 Download the LIBOR USD.csv file
 Change year_bigin and year_end to set up year interval for second regression. Change the days_before_holiday if you want 
